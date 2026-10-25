@@ -1,1 +1,1 @@
-Enterprise-grade AI hub featuring Intelligent Entity Filtering, Content Negotiation, and a token-secured OpenAPI manifest.
+Enterprise-grade AI hub featuring Intelligent Entity Filtering, Content Negotiation, and a token-secured OpenAPI manifest. Strips CSS, Scripts and other code from page so LLMs only see what they need to index pages. Displays basic code, meta information & schema for Large Language Models.
