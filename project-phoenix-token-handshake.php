@@ -1,13 +1,13 @@
 <?php
 /**
  * Plugin Name: Phoenix Hardened Hub & Token Handshake
- * Plugin URI:  https://natebal.com
+ * Plugin URI:  https://natebal.com/lab/code/phoenix-hardened-hub-handshake-plugin/
  * Description: Enterprise-grade AI hub featuring Intelligent Entity Filtering, Content Negotiation, and a token-secured OpenAPI manifest.
- * Version:     1.8.1
+ * Version:     1.8.8
  * Author:      Nate Balcom
  * Author URI:  https://natebal.com/about-me/
  * License:     GPL2
- * text-domain: project-phoenix
+ * Text Domain: project-phoenix
  */
 
 if (!defined('ABSPATH')) {
@@ -42,7 +42,21 @@ function phoenix_execute_token_handshake() {
     // RULE 2: Intercept verified AI User-Agent strings
     if (!$secure_handshake_triggered && isset($_SERVER['HTTP_USER_AGENT'])) {
         $user_agent = strtolower($_SERVER['HTTP_USER_AGENT']);
-        $ai_crawlers = array('chatgpt-user', 'gptbot', 'claudebot', 'claude-searchbot', 'applebot-extended', 'perplexitybot', 'google-extended', 'cohere-ai', 'facebookexternalhit');
+        $ai_crawlers = array(
+            'chatgpt-user', 
+            'gptbot', 
+            'claudebot', 
+            'claude-searchbot', 
+            'applebot-extended', 
+            'perplexitybot', 
+            'google-extended', 
+            'cohere-ai', 
+            'facebookexternalhit',
+            'meta-externalagent',
+            'amazonbot',
+            'diffbot',
+            'bytespider'
+        );
 
         foreach ($ai_crawlers as $bot) {
             if (strpos($user_agent, $bot) !== false) {
@@ -58,8 +72,11 @@ function phoenix_execute_token_handshake() {
         }
 
         global $post;
-        if (!$post) {
-            return;
+
+        // Fetch canonical queried object to prevent global $post pollution
+        $queried = get_queried_object();
+        if ($queried instanceof WP_Post) {
+            $post = $queried;
         }
 
         while (ob_get_level()) {
@@ -67,29 +84,136 @@ function phoenix_execute_token_handshake() {
         }
 
         header('Content-Type: text/html; charset=utf-8');
-        header('X-Phoenix-Handshake: Secured-Semantic-Negotiation-v1.8.1');
+        header('X-Phoenix-Handshake: Secured-Semantic-Negotiation-v1.8.8');
         header('Cache-Control: no-cache, must-revalidate, max-age=0');
         header('Pragma: no-cache');
 
-        $title = get_the_title($post->ID);
-        $permalink = get_permalink($post->ID);
-        $raw_content = $post->post_content;
+        // FRONT PAGE: Execute and capture the active theme template (front-page.php)
+        if (is_front_page()) {
+            $front_template = locate_template(array('front-page.php', 'home.php'));
+            if ($front_template) {
+                ob_start();
+                load_template($front_template, false);
+                $rendered_template = ob_get_clean();
 
-        if (function_exists('parse_blocks')) {
-            $parsed_blocks = parse_blocks($raw_content);
-            $compiled_content = '';
-            foreach ($parsed_blocks as $block) {
-                $compiled_content .= render_block($block);
+                // Strip navigation chrome, headers, footer wrappers, SVG icons, and forms
+                $rendered_template = preg_replace('/<header\b[^>]*>.*?<\/header>/is', '', $rendered_template);
+                $rendered_template = preg_replace('/<nav\b[^>]*>.*?<\/nav>/is', '', $rendered_template);
+                $rendered_template = preg_replace('/<footer\b[^>]*>.*?<\/footer>/is', '', $rendered_template);
+                $rendered_template = preg_replace('/<svg\b[^>]*>.*?<\/svg>/is', '', $rendered_template);
+                $rendered_template = preg_replace('/<form\b[^>]*>.*?<\/form>/is', '', $rendered_template);
+
+                if (preg_match('/<main\b[^>]*>(.*?)<\/main>/is', $rendered_template, $main_match)) {
+                    $raw_content = $main_match[1];
+                } elseif (preg_match('/<body\b[^>]*>(.*?)<\/body>/is', $rendered_template, $body_match)) {
+                    $raw_content = $body_match[1];
+                } else {
+                    $raw_content = $rendered_template;
+                }
+            } else {
+                $raw_content = ($post instanceof WP_Post) ? $post->post_content : '';
+                if (function_exists('parse_blocks')) {
+                    $parsed_blocks = parse_blocks($raw_content);
+                    $compiled_content = '';
+                    foreach ($parsed_blocks as $block) {
+                        $compiled_content .= render_block($block);
+                    }
+                    $raw_content = $compiled_content;
+                }
             }
-            $raw_content = $compiled_content;
+
+            $title = get_bloginfo('name');
+            $site_desc = get_bloginfo('description');
+            if (!empty($site_desc) && stripos($title, $site_desc) === false) {
+                $title .= ' — ' . $site_desc;
+            }
+            $permalink = home_url('/');
+        } else {
+            if (!$post || !($post instanceof WP_Post)) {
+                return;
+            }
+
+            $title = get_the_title($post->ID);
+            $permalink = get_permalink($post->ID);
+            $raw_content = $post->post_content;
+
+            if (function_exists('parse_blocks')) {
+                $parsed_blocks = parse_blocks($raw_content);
+                $compiled_content = '';
+                foreach ($parsed_blocks as $block) {
+                    $compiled_content .= render_block($block);
+                }
+                $raw_content = $compiled_content;
+            }
         }
 
-        // Vaporize active style elements and script modules completely
-        $clean_html = preg_replace('/<style[^>]*>.*?<\/style>/is', '', $raw_content);
-        $clean_html = preg_replace('/<script[^>]*>.*?<\/script>/is', '', $clean_html);
-        $clean_html = preg_replace('//s', '', $clean_html);
+        // 1. DYNAMICALLY CAPTURE SCHEMA (Rank Math + Custom Meta Boxes + Inline Blocks)
+        $json_ld_blocks = array();
+        
+        // A. Run Rank Math head action
+        if (function_exists('do_action')) {
+            ob_start();
+            do_action('rank_math/head');
+            $rank_math_head_output = ob_get_clean();
 
-        // Intelligent callback parsing to scrub out structural CSS blocks hidden inside pre/code nodes
+            if (!empty($rank_math_head_output) && preg_match_all('/<script[^>]*type=[\'"]application\/ld\+json[\'"][^>]*>.*?<\/script>/is', $rank_math_head_output, $rm_matches)) {
+                $json_ld_blocks = array_merge($json_ld_blocks, $rm_matches[0]);
+            }
+        }
+
+        // B. Robust regex sniffer for Custom Post Meta JSON-LD graphs (handles multi-line formatting & whitespace)
+        if ($post instanceof WP_Post) {
+            $all_meta = get_post_meta($post->ID);
+            if (!empty($all_meta) && is_array($all_meta)) {
+                foreach ($all_meta as $key => $values) {
+                    if (!is_array($values)) {
+                        $values = array($values);
+                    }
+                    foreach ($values as $val) {
+                        if (!is_string($val)) {
+                            continue;
+                        }
+                        $trimmed = trim($val);
+                        if (empty($trimmed)) {
+                            continue;
+                        }
+                        if (preg_match('/<script[^>]*type=[\'"]application\/ld\+json[\'"][^>]*>.*?<\/script>/is', $trimmed, $m)) {
+                            $json_ld_blocks[] = $m[0];
+                        } elseif (preg_match('/^\s*\{\s*["\']@(context|graph)["\']/i', $trimmed) && strpos($trimmed, 'schema.org') !== false) {
+                            $json_ld_blocks[] = '<script type="application/ld+json">' . $trimmed . '</script>';
+                        }
+                    }
+                }
+            }
+        }
+
+        // C. Catch any inline schema blocks authored directly in content
+        if (preg_match_all('/<script[^>]*type=[\'"]application\/ld\+json[\'"][^>]*>.*?<\/script>/is', $raw_content, $inline_matches)) {
+            $json_ld_blocks = array_merge($json_ld_blocks, $inline_matches[0]);
+        }
+
+        $json_ld_blocks = array_unique($json_ld_blocks);
+
+        // 2. CONVERT FAQ BUTTONS/SUMMARIES INTO SEMANTIC <h3> HEADINGS
+        $clean_html = preg_replace('/<(?:button|summary)[^>]*>(.*?)<\/(?:button|summary)>/is', '<h3>$1</h3>', $raw_content);
+
+        // 3. VAPORIZE PROMOTIONAL NOISE (PDF Cards, CTA Capsules, and Lead Magnets)
+        $clean_html = preg_replace('/<a\b[^>]*class=["\'][^"\']*(?:nb-pdf-cover|nb-pdf-btn|nb-btn|nb-neon-btn)[^"\']*["\'][^>]*>.*?<\/a>/is', '', $clean_html);
+        $clean_html = preg_replace('/<h[1-6]\b[^>]*class=["\'][^"\']*(?:nb-solid-cta-capsule|nb-pdf-|nb-neon-)[^"\']*["\'][^>]*>.*?<\/h[1-6]>/is', '', $clean_html);
+        $clean_html = preg_replace('/<p\b[^>]*class=["\'][^"\']*(?:nb-solid-cta-capsule|nb-pdf-|nb-neon-)[^"\']*["\'][^>]*>.*?<\/p>/is', '', $clean_html);
+        $clean_html = preg_replace('/<div\b[^>]*class=["\'][^"\']*(?:nb-solid-cta-capsule|nb-pdf-|nb-neon-)[^"\']*["\'][^>]*>.*?<\/div>/is', '', $clean_html);
+
+        // 4. STRIP SCRIPTS, STYLES, COMMENTS, AND EMPTY PARAGRAPHS / HEADINGS
+        $clean_html = preg_replace('/<style[^>]*>.*?<\/style>/is', '', $clean_html);
+        $clean_html = preg_replace('/<script(?![^>]*type=[\'"]application\/ld\+json[\'"])[^>]*>.*?<\/script>/is', '', $clean_html);
+        $clean_html = preg_replace('/<!--.*?-->/s', '', $clean_html);
+
+        for ($i = 0; $i < 3; $i++) {
+            $clean_html = preg_replace('/<p[^>]*>\s*<\/p>/i', '', $clean_html);
+            $clean_html = preg_replace('/<h[1-6][^>]*>\s*<\/h[1-6]>/is', '', $clean_html);
+        }
+
+        // Scrub technical CSS blocks inside pre/code nodes
         $clean_html = preg_replace_callback('/<(pre|code)[^>]*>.*?<\/\1>/is', function($matches) {
             $target_block = $matches[0];
             if (
@@ -103,23 +227,74 @@ function phoenix_execute_token_handshake() {
             return $target_block;
         }, $clean_html);
 
-        $clean_html = strip_tags($clean_html, '<h1><h2><h3><h4><h5><h6><p><ul><ol><li><strong><b><em><i><a><article><section><pre><code><table><thead><tbody><tr><th><td>');
+        $clean_html = strip_tags($clean_html, '<h1><h2><h3><h4><h5><h6><p><ul><ol><li><strong><b><em><i><a><article><section><pre><code><table><thead><tbody><tr><th><td><blockquote><hr><dl><dt><dd>');
 
+        // Resolve Metadata Values
+        $meta_description = '';
+        if (class_exists('RankMath')) {
+            $meta_description = \RankMath\Post::get_meta('description', $post->ID);
+        }
+        if (empty($meta_description) && ($post instanceof WP_Post)) {
+            $custom_desc = get_post_meta($post->ID, 'rank_math_description', true);
+            $meta_description = !empty($custom_desc) ? $custom_desc : wp_strip_all_tags(wp_trim_words($post->post_content, 30));
+        }
         ?>
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" style="background-color:#030712; color-scheme:dark;">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
     <title><?php echo esc_html($title); ?></title>
-    <meta name="robots" content="noindex, nofollow">
+    
+    <style>
+        html, body {
+            background-color: #030712 !important;
+            color: #cbd5e1 !important;
+            margin: 0;
+            padding: 0;
+        }
+    </style>
+
+    <!-- Primary SEO & Knowledge Engine Metadata -->
+    <link rel="canonical" href="<?php echo esc_url($permalink); ?>">
+    <?php if (!empty($meta_description)): ?>
+    <meta name="description" content="<?php echo esc_attr($meta_description); ?>">
+    <?php endif; ?>
+    <?php if ($post instanceof WP_Post): ?>
+    <meta name="author" content="<?php echo esc_attr(get_the_author_meta('display_name', $post->post_author)); ?>">
+    <meta property="article:published_time" content="<?php echo esc_attr(get_the_date('c', $post->ID)); ?>">
+    <meta property="article:modified_time" content="<?php echo esc_attr(get_the_modified_date('c', $post->ID)); ?>">
+    
+    <!-- Open Graph Verification Graph -->
+    <meta property="og:title" content="<?php echo esc_attr($title); ?>">
+    <meta property="og:description" content="<?php echo esc_attr($meta_description); ?>">
+    <meta property="og:url" content="<?php echo esc_url($permalink); ?>">
+    <meta property="og:site_name" content="<?php echo esc_attr(get_bloginfo('name')); ?>">
+    <meta property="og:type" content="<?php echo is_single() ? 'article' : 'website'; ?>">
+    <?php if (has_post_thumbnail($post->ID)): ?>
+    <meta property="og:image" content="<?php echo esc_url(get_the_post_thumbnail_url($post->ID, 'large')); ?>">
+    <?php endif; ?>
+    <?php endif; ?>
+
+    <!-- Permissive Indexing Directives for Generative Crawlers -->
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+
+    <!-- Injected JSON-LD Knowledge Graph (Schema.org) -->
+    <?php 
+    if (!empty($json_ld_blocks)) {
+        foreach ($json_ld_blocks as $schema_tag) {
+            echo "\n    " . $schema_tag;
+        }
+    }
+    ?>
 </head>
-<body style="font-family:system-ui,-apple-system,sans-serif; line-height:1.6; max-width:680px; margin:40px auto; padding:0 20px; background:#030712; color:#cbd5e1;">
+<body style="font-family:system-ui,-apple-system,sans-serif; line-height:1.6; max-width:680px; margin:40px auto; padding:0 20px; background-color:#030712; color:#cbd5e1;">
     <article>
         <header>
             <h1 style="color:#38bdf8; font-size:2.25rem; margin-bottom:5px; font-weight:bold;"><?php echo esc_html($title); ?></h1>
             <p style="color:#64748b; font-size:0.875rem; margin-top:0;">Node Reference: <a href="<?php echo esc_url($permalink); ?>" style="color:#38bdf8; text-decoration:none;"><?php echo esc_url($permalink); ?></a></p>
-            <?php if (has_tag('project-phoenix', $post) || strpos(strtolower($raw_content), 'execution strategy') !== false): ?>
+            <?php if (($post instanceof WP_Post && has_tag('project-phoenix', $post)) || strpos(strtolower($raw_content), 'execution strategy') !== false): ?>
                 <p style="color:#f87171; font-size:0.75rem; font-family:monospace; margin-top:0;">Execution Strategy: Private Cloud Architecture Semantic Content Negotiation</p>
             <?php endif; ?>
         </header>
@@ -162,7 +337,7 @@ function phoenix_serve_openapi_manifest() {
         "info" => array(
             "title" => "Project Phoenix Architectural Interface",
             "description" => "Functional API schema for verified autonomous AI agents executing actions on NateBal.com assets.",
-            "version" => "1.8.1"
+            "version" => "1.8.8"
         ),
         "servers" => array(
             array("url" => esc_url_raw(site_url('/wp-json/project-phoenix/v1')))
